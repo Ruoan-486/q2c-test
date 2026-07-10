@@ -1323,30 +1323,17 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
             batch_size = 5000
 
             import_error = None
-            msgs = chatlab_data["messages"]
-            # 按天拆分：跨度>1天则第一天带members/meta，后续天仅消息
-            if msgs:
-                from datetime import datetime, timezone
-                first_dt = datetime.fromtimestamp(msgs[0]["timestamp"], tz=timezone.utc)
-                next_day = datetime(first_dt.year, first_dt.month, first_dt.day, tzinfo=timezone.utc).timestamp() + 86400
-                first_day_msgs = [m for m in msgs if m["timestamp"] < next_day]
-                rest_msgs = [m for m in msgs if m["timestamp"] >= next_day]
-                if rest_msgs:
-                    _add_sync_log_internal(f"  📅 跨多天: 第一天{len(first_day_msgs)}条, 后续{len(rest_msgs)}条")
-                    batches = [(first_day_msgs, True)]
-                    for j in range(0, len(rest_msgs), batch_size):
-                        batches.append((rest_msgs[j:j+batch_size], False))
-                else:
-                    batches = [(msgs, True)]
-            else:
-                batches = []
-
-            for i, (batch, is_first) in enumerate(batches):
+            total_msgs = len(chatlab_data["messages"])
+            batch_size = 5000
+            for i in range(0, total_msgs, batch_size):
+                batch = chatlab_data["messages"][i:i + batch_size]
+                is_first = (i == 0)
                 import_body = {
                     "chatlab": chatlab_data["chatlab"],
                     "messages": batch,
+                    "members": chatlab_data["members"],
+                    "options": {"metaUpdateMode": "none", "memberUpdateMode": "upsert"},
                 }
-                import_body["members"] = chatlab_data["members"]
                 if is_first:
                     import_body["meta"] = chatlab_data["meta"]
 
