@@ -1314,35 +1314,28 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
             batch_size = 5000
 
             import_error = None
-            # 第一批只发 5 条消息 + 完整 members/meta，让 ChatLab 先创建会话和成员
-            # 后续批再发剩余消息
-            first_batch = chatlab_data["messages"][:5]
-            remaining = chatlab_data["messages"][5:]
-            batches = []
-            if first_batch:
-                batches.append((first_batch, True))
-            for i in range(0, len(remaining), batch_size):
-                batches.append((remaining[i:i + batch_size], False))
-
-            for i_batch, (batch, is_first_batch) in enumerate(batches):
+            for i in range(0, total_msgs, batch_size):
+                batch = chatlab_data["messages"][i:i + batch_size]
+                is_first = (i == 0)
                 import_body = {
                     "chatlab": chatlab_data["chatlab"],
                     "messages": batch,
+                    "members": chatlab_data["members"],
                 }
-                if is_first_batch:
+                if is_first:
                     import_body["meta"] = chatlab_data["meta"]
-                    import_body["members"] = chatlab_data["members"]
 
                 try:
-                    if is_first_batch:
+                    # 调试：打印第一条消息样例
+                    if is_first and batch:
                         sample = batch[0]
                         _add_sync_log_internal(f"  [DEBUG] 第一条消息: id={sample.get('platformMessageId','?')} sender={sample.get('sender','?')} name={sample.get('accountName','?')} type={sample.get('type','?')} content={repr(sample.get('content','?'))[:100]}")
                         _add_sync_log_internal(f"  [DEBUG] meta: {json.dumps(chatlab_data.get('meta',{}), ensure_ascii=False)[:200]}")
                         _add_sync_log_internal(f"  [DEBUG] members 数量: {len(chatlab_data.get('members',[]))}")
                         if chatlab_data.get("members"):
-                            for i, m in enumerate(chatlab_data['members'][:2]):
+                            for j, m in enumerate(chatlab_data['members'][:2]):
                                 d = {k:v for k,v in m.items() if k != 'avatar'}
-                                _add_sync_log_internal(f"  [DEBUG] 成员{i}: {json.dumps(d, ensure_ascii=False)[:150]}")
+                                _add_sync_log_internal(f"  [DEBUG] 成员{j}: {json.dumps(d, ensure_ascii=False)[:150]}")
 
                     import_resp = httpx.post(
                         f"{chatlab_base}/api/v1/imports/{session_id}",
@@ -1351,12 +1344,11 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
                         timeout=120,
                     )
                     ir = import_resp.json()
-                    _add_sync_log_internal(f"  [DEB] ChatLab响应: {json.dumps(ir.get('data',{}), ensure_ascii=False)[:200]}")
                     if ir.get("success"):
                         created = ir.get("data", {}).get("created", False)
                         wc = ir.get("data", {}).get("batch", {}).get("writtenCount", len(batch))
                         flag = "🆕" if created else ""
-                        _add_sync_log_internal(f"  ✅ 批次 {i_batch+1}: {flag} 写入 {wc} 条, session={session_id}")
+                        _add_sync_log_internal(f"  ✅ 批次 {i//batch_size+1}: {flag} 写入 {wc} 条, session={session_id}")
                     else:
                         err_msg = str(ir.get("error","导入返回失败"))
                         _add_sync_log_internal(f"  ❌ 导入失败: {err_msg}")
