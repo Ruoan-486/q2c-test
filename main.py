@@ -796,7 +796,7 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
 
     # ── 构建成员列表（ChatLab 要求：id=主键, platformId=DB约束, name=显示名） ──
     for uid, name in uid_to_name.items():
-        member_entry = {"id": uid, "platformId": uid, "name": name}
+        member_entry = {"id": uid, "platformId": uid, "accountName": name}
         if uid in avatars_map:
             b64_clean = avatars_map[uid].strip().replace("\n", "").replace("\r", "")
             mime = _detect_mime(b64_clean)
@@ -820,7 +820,7 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
 
         # 补充 members（消息里有但统计里没有的新用户）
         if sender_id and sender_id not in uid_to_name:
-            chatlab_data["members"].append({"id": sender_id, "platformId": sender_id, "name": s_name})
+            chatlab_data["members"].append({"id": sender_id, "platformId": sender_id, "accountName": s_name})
             uid_to_name[sender_id] = s_name
 
         ts = msg.get("timestamp", 0)
@@ -1315,6 +1315,8 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
                 }
                 if is_first:
                     import_body["meta"] = chatlab_data["meta"]
+                # 确保 meta 和 members 更新
+                import_body["options"] = {"metaUpdateMode": "patch", "memberUpdateMode": "upsert"}
 
                 try:
                     # 调试：打印第一条消息样例
