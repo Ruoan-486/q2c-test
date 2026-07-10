@@ -1114,18 +1114,32 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
             # 清理非法文件名
             custom_filename = custom_filename.replace("/", "_").replace("\\", "_").replace(":", "_")
 
+            # 构造导出参数（完全对齐 QCE v4 tool 前端格式）
+            session_name = peer.get("name", peer_name)
+            now_ts = int(time.time())
             export_params = {
                 "peer": {
                     "chatType": 2 if peer_type == "group" else 1,
                     "peerUid": peer_uid,
+                    "guildId": "",
                 },
+                "sessionName": session_name,
                 "format": export_format,
-                "timeRangeType": "recent",
-                "timeRangeDays": time_range_days,
-                "exportMedia": export_media,
-                "downloadMedia": export_media,
-                "embedAvatarsAsBase64": True,  # 顶层参数！不在 options 里
-                "includeMembers": True,  # 强制返回完整成员列表
+                "filter": {
+                    "startTime": now_ts - time_range_days * 86400,
+                    "endTime": now_ts,
+                    "includeRecalled": False,
+                    "includeSystemMessages": True,
+                },
+                "options": {
+                    "batchSize": 5000,
+                    "includeResourceLinks": True,
+                    "includeSystemMessages": True,
+                    "filterPureImageMessages": True,
+                    "prettyFormat": True,
+                    "embedAvatarsAsBase64": True,
+                    "preferGroupMemberName": True,
+                },
                 "fileName": custom_filename,
             }
 
