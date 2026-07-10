@@ -706,6 +706,12 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
         if resolved and resolved != peer_uid:
             display_name = resolved
 
+    # ── 名称清洗：去除非打印字符 ──
+    _CLEANER = lambda n: "".join(c for c in n if c.isprintable() or c == ' ').strip()
+    display_name = _CLEANER(display_name) or peer_uid
+    for k in list(uid_to_name.keys()):
+        uid_to_name[k] = _CLEANER(uid_to_name[k]) or k
+
     # ── 补充系统/匿名账号名称映射 ──
     _SYSTEM_NAMES = {
         "0": "系统消息",
@@ -794,9 +800,13 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
             return "image/gif"
         return "image/png"
 
-    # ── 构建成员列表（ChatLab 要求：id=主键, platformId=DB约束, name=显示名） ──
+    # ── 构建成员列表（只发送真实用户，跳过系统 ID）──
+    _SKIP_IDS = {"0", "10000", "system", "notify", "anonymous", "-1", "self", "sys"}
     for uid, name in uid_to_name.items():
-        member_entry = {"id": uid, "platformId": uid, "accountName": name}
+        if str(uid).strip() in _SKIP_IDS:
+            continue
+        clean_name = "".join(c for c in name if c.isprintable() or c == ' ')
+        member_entry = {"platformId": uid, "accountName": clean_name.strip() or uid}
         if uid in avatars_map:
             b64_clean = avatars_map[uid].strip().replace("\n", "").replace("\r", "")
             mime = _detect_mime(b64_clean)
@@ -820,7 +830,7 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
 
         # 补充 members（消息里有但统计里没有的新用户）
         if sender_id and sender_id not in uid_to_name:
-            chatlab_data["members"].append({"id": sender_id, "platformId": sender_id, "accountName": s_name})
+            chatlab_data["members"].append({"platformId": sender_id, "accountName": _CLEANER(s_name) or sender_id})
             uid_to_name[sender_id] = s_name
 
         ts = msg.get("timestamp", 0)
@@ -1304,29 +1314,35 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
             batch_size = 5000
 
             import_error = None
-            for i in range(0, total_msgs, batch_size):
-                batch = chatlab_data["messages"][i:i + batch_size]
-                is_first = (i == 0)
+            # 第一批只发 5 条消息 + 完整 members/meta，让 ChatLab 先创建会话和成员
+            # 后续批再发剩余消息
+            first_batch = chatlab_data["messages"][:5]
+            remaining = chatlab_data["messages"][5:]
+            batches = []
+            if first_batch:
+                batches.append((first_batch, True))
+            for i in range(0, len(remaining), batch_size):
+                batches.append((remaining[i:i + batch_size], False))
 
+            for i_batch, (batch, is_first_batch) in enumerate(batches):
                 import_body = {
                     "chatlab": chatlab_data["chatlab"],
                     "messages": batch,
-                    "members": chatlab_data["members"],  # 每批都传 members，增量不更新成员信息但必须传
                 }
-                if is_first:
+                if is_first_batch:
                     import_body["meta"] = chatlab_data["meta"]
-                # 确保 meta 和 members 更新
-                import_body["options"] = {"metaUpdateMode": "patch", "memberUpdateMode": "upsert"}
+                    import_body["members"] = chatlab_data["members"]
 
                 try:
-                    # 调试：打印第一条消息样例
-                    if is_first and batch:
+                    if is_first_batch:
                         sample = batch[0]
                         _add_sync_log_internal(f"  [DEBUG] 第一条消息: id={sample.get('platformMessageId','?')} sender={sample.get('sender','?')} name={sample.get('accountName','?')} type={sample.get('type','?')} content={repr(sample.get('content','?'))[:100]}")
                         _add_sync_log_internal(f"  [DEBUG] meta: {json.dumps(chatlab_data.get('meta',{}), ensure_ascii=False)[:200]}")
                         _add_sync_log_internal(f"  [DEBUG] members 数量: {len(chatlab_data.get('members',[]))}")
                         if chatlab_data.get("members"):
-                            _add_sync_log_internal(f"  [DEBUG] 第一个成员: {json.dumps(chatlab_data['members'][0], ensure_ascii=False)}")
+                            for i, m in enumerate(chatlab_data['members'][:2]):
+                                d = {k:v for k,v in m.items() if k != 'avatar'}
+                                _add_sync_log_internal(f"  [DEBUG] 成员{i}: {json.dumps(d, ensure_ascii=False)[:150]}")
 
                     import_resp = httpx.post(
                         f"{chatlab_base}/api/v1/imports/{session_id}",
@@ -1335,13 +1351,12 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
                         timeout=120,
                     )
                     ir = import_resp.json()
+                    _add_sync_log_internal(f"  [DEB] ChatLab响应: {json.dumps(ir.get('data',{}), ensure_ascii=False)[:200]}")
                     if ir.get("success"):
                         created = ir.get("data", {}).get("created", False)
-                        session_name = ir.get("data", {}).get("sessionId", session_id)
                         wc = ir.get("data", {}).get("batch", {}).get("writtenCount", len(batch))
-                        dc = ir.get("data", {}).get("batch", {}).get("duplicateCount", 0)
                         flag = "🆕" if created else ""
-                        _add_sync_log_internal(f"  ✅ 批次 {i//batch_size+1}: {flag} 写入 {wc} 条, 去重 {dc} 条, session={session_name}")
+                        _add_sync_log_internal(f"  ✅ 批次 {i_batch+1}: {flag} 写入 {wc} 条, session={session_id}")
                     else:
                         err_msg = str(ir.get("error","导入返回失败"))
                         _add_sync_log_internal(f"  ❌ 导入失败: {err_msg}")
