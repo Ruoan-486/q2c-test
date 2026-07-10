@@ -573,30 +573,66 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
     if not display_name or display_name == peer_uid:
         display_name = peer_name or peer_uid
 
-    # ── 统一的 ID 标准化函数 ──
-    def _normalize_id(d: dict) -> str:
-        """从字典中提取标准化用户ID：优先 uin（数字QQ号），兜底 uid/id
-        自动处理：int/str 类型差异、去除空格、纯数字去除前导零
+    # ── uin ↔ uid 双向映射（群聊双体系桥接）──
+    uin_to_uid = {}
+    uid_to_uin = {}
+    for m in chat_info.get("members", []):
+        if not isinstance(m, dict):
+            continue
+        uin = str(m.get("uin", "") or "").strip()
+        uid = str(m.get("uid", "") or "").strip()
+        if uin and uid:
+            uin_to_uid[uin] = uid
+            uid_to_uin[uid] = uin
+
+    # ── 统一的 ID 标准化函数（带 uin↔uid 桥接）──
+    def _normalize_id(d: dict, prefer_uin: bool = True) -> str:
+        """提取标准化用户ID，统一归一到 uin 体系
+        prefer_uin=True → 优先 uin，然后反查映射，最后兜底 uid/id
         """
-        for key in ["uin", "uid", "id"]:
-            val = d.get(key)
-            if val is not None:
-                s = str(val).strip()
-                if s.isdigit():
-                    # 纯数字 → int再转回str，消除前导零
-                    return str(int(s))
-                return s
-        return ""
+        raw_uin = ""
+        raw_uid = ""
+        raw_id = ""
+        if isinstance(d, dict):
+            raw_uin = str(d.get("uin", "") or "").strip()
+            raw_uid = str(d.get("uid", "") or "").strip()
+            raw_id = str(d.get("id", "") or "").strip()
+        else:
+            raw = str(d or "").strip()
+            if raw.isdigit():
+                raw_uin = raw
+            else:
+                raw_uid = raw
+
+        if prefer_uin:
+            if raw_uin:
+                return str(int(raw_uin)) if raw_uin.isdigit() else raw_uin
+            # 用 uid 反查 uin
+            if raw_uid and raw_uid in uid_to_uin:
+                return uid_to_uin[raw_uid]
+            return raw_uid or raw_id
+        else:
+            if raw_uid:
+                return raw_uid
+            if raw_uin and raw_uin in uin_to_uid:
+                return uin_to_uid[raw_uin]
+            return raw_uin or raw_id
 
     # ── 名称优先级函数（按场景）──
+    _CARD_NAME_KEYS = ["cardName", "card", "groupCard", "displayName", "nameCard"]
     def _resolve_name(user: dict, is_peer: bool = False) -> str:
         """根据会话类型决定名称优先级
-        群聊：cardName(群名片) > nick(昵称) > uin/uid
+        群聊：cardName/groupCard(群名片) > nick(昵称) > uin/uid
         私聊：peerRemark(备注) > remark > nick(昵称) > uin/uid
         """
         if chat_type == "group":
-            # 群聊：群名片优先
-            card = (user.get("cardName") or "").strip()
+            # 群聊：兼容所有常见群名片字段名
+            card = ""
+            for key in _CARD_NAME_KEYS:
+                val = user.get(key, "")
+                if isinstance(val, str) and val.strip():
+                    card = val.strip()
+                    break
             if card:
                 return card
         else:
@@ -617,7 +653,10 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
 
     # ── 构建标准化 UID → 用户名映射 ──
     uid_to_name = {}
-    self_uid = str(chat_info.get("selfUin", chat_info.get("selfUid", "")))
+    self_uid_raw = chat_info.get("selfUin") or chat_info.get("selfUid") or ""
+    self_uid = str(self_uid_raw).strip()
+    if self_uid.isdigit():
+        self_uid = str(int(self_uid))
     self_name = chat_info.get("selfName", chat_info.get("selfNick", ""))
     if self_uid:
         uid_to_name[self_uid] = self_name or self_uid
@@ -637,12 +676,17 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
         if mid and mid not in uid_to_name:
             uid_to_name[mid] = _resolve_name(m)
 
-    # peer 名字（传 is_peer=True 以读取 chatInfo 顶层备注）
-    if peer_uid and not uid_to_name.get(peer_uid):
-        # 私聊场景：对方不在 statistics.senders 中，先尝试从 chatInfo 取备注
-        peer_name = _resolve_name({}, is_peer=True)
-        # 如果备注/remark/name 都为空，用 display_name（会话标题）兜底
-        uid_to_name[peer_uid] = peer_name or display_name
+    # ── peer 名称：私聊强制覆盖备注，群聊兜底 ──
+    if chat_type == "private" and peer_uid:
+        # 私聊：好友备注优先于任何已有名称，直接覆盖
+        peer_remark = (chat_info.get("peerRemark") or chat_info.get("friendRemark") or "").strip()
+        if peer_remark:
+            uid_to_name[peer_uid] = peer_remark
+        elif peer_uid not in uid_to_name:
+            uid_to_name[peer_uid] = display_name
+    elif peer_uid and peer_uid not in uid_to_name:
+        # 群聊：不在成员表里才兜底
+        uid_to_name[peer_uid] = display_name
 
     # ── 补充系统/匿名账号名称映射 ──
     _SYSTEM_NAMES = {
@@ -1080,9 +1124,8 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
                 "timeRangeDays": time_range_days,
                 "exportMedia": export_media,
                 "downloadMedia": export_media,
-                "options": {
-                    "embedAvatarsAsBase64": True,
-                },
+                "embedAvatarsAsBase64": True,  # 顶层参数！不在 options 里
+                "includeMembers": True,  # 强制返回完整成员列表
                 "fileName": custom_filename,
             }
 
