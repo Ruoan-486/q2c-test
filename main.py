@@ -554,8 +554,15 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
     if isinstance(qce_chat_type_raw, int):
         # QCE chatType: 2=群聊, 1=私聊
         chat_type = "group" if qce_chat_type_raw == 2 else "private"
-    elif isinstance(qce_chat_type_raw, str) and qce_chat_type_raw.lower() in ["group", "private"]:
-        chat_type = qce_chat_type_raw.lower()
+    elif isinstance(qce_chat_type_raw, str):
+        raw_lower = qce_chat_type_raw.lower().strip()
+        # 兼容所有可能的群聊/私聊写法
+        if raw_lower in ["group", "chatroom", "room", "groupchat"]:
+            chat_type = "group"
+        elif raw_lower in ["private", "friend", "buddy", "c2c", "single"]:
+            chat_type = "private"
+        else:
+            chat_type = peer_info.get("type", "private")
     else:
         chat_type = peer_info.get("type", "private")
 
@@ -568,11 +575,17 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
 
     # ── 统一的 ID 标准化函数 ──
     def _normalize_id(d: dict) -> str:
-        """从字典中提取标准化用户ID：优先 uin（数字QQ号），兜底 uid/id"""
+        """从字典中提取标准化用户ID：优先 uin（数字QQ号），兜底 uid/id
+        自动处理：int/str 类型差异、去除空格、纯数字去除前导零
+        """
         for key in ["uin", "uid", "id"]:
             val = d.get(key)
             if val is not None:
-                return str(val)
+                s = str(val).strip()
+                if s.isdigit():
+                    # 纯数字 → int再转回str，消除前导零
+                    return str(int(s))
+                return s
         return ""
 
     # ── 名称优先级函数（按场景）──
@@ -627,6 +640,18 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
     # peer 名字（传 is_peer=True 以读取 chatInfo 顶层备注）
     if peer_uid and not uid_to_name.get(peer_uid):
         uid_to_name[peer_uid] = _resolve_name({}, is_peer=True)
+
+    # ── 补充系统/匿名账号名称映射 ──
+    _SYSTEM_NAMES = {
+        "0": "系统消息",
+        "10000": "系统消息",
+        "system": "系统通知",
+        "notify": "通知",
+        "anonymous": "匿名用户",
+    }
+    for sys_id, sys_name in _SYSTEM_NAMES.items():
+        if sys_id not in uid_to_name:
+            uid_to_name[sys_id] = sys_name
 
     chatlab_data = {
         "chatlab": {"version": "0.0.2", "exportedAt": int(time.time()), "generator": "QCE2ChatLab/1.0"},
@@ -696,9 +721,9 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
             return "image/gif"
         return "image/png"
 
-    # ── 构建成员列表 ──
+    # ── 构建成员列表（ChatLab 要求：主键是 id，名称是 name） ──
     for uid, name in uid_to_name.items():
-        member_entry = {"platformId": uid, "accountName": name}
+        member_entry = {"id": uid, "name": name}
         if uid in avatars_map:
             b64_clean = avatars_map[uid].strip().replace("\n", "").replace("\r", "")
             mime = _detect_mime(b64_clean)
@@ -1198,10 +1223,10 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
                 import_body = {
                     "chatlab": chatlab_data["chatlab"],
                     "messages": batch,
+                    "members": chatlab_data["members"],  # 每批都传 members，增量不更新成员信息但必须传
                 }
                 if is_first:
                     import_body["meta"] = chatlab_data["meta"]
-                    import_body["members"] = chatlab_data["members"]
 
                 try:
                     # 调试：打印第一条消息样例
