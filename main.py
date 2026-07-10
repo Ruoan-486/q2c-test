@@ -997,6 +997,14 @@ def _ensure_services_running(config: dict):
 
     # 检查 ChatLab
     chatlab_ok = _check_service(chatlab_url, chatlab_port)
+    if chatlab_ok:
+        try:
+            clh = get_chatlab_headers(config)
+            sr = httpx.get(f"{chatlab_url}/api/v1/status", headers=clh, timeout=3)
+            sd = sr.json()
+            log(f"📦 ChatLab v{sd.get('data',{}).get('version','?')}, 会话数: {sd.get('data',{}).get('sessionCount','?')}")
+        except Exception:
+            pass
     if not chatlab_ok:
         _launch_script(chatlab_script, "ChatLab", chatlab_url, chatlab_port)
 
@@ -1349,6 +1357,18 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
                         wc = ir.get("data", {}).get("batch", {}).get("writtenCount", len(batch))
                         flag = "🆕" if created else ""
                         _add_sync_log_internal(f"  ✅ 批次 {i//batch_size+1}: {flag} 写入 {wc} 条, session={session_id}")
+                        # 查 ChatLab 端实际存了什么成员
+                        if is_first:
+                            try:
+                                mr = httpx.get(f"{chatlab_base}/api/v1/sessions/{session_id}/members", headers=chatlab_headers, timeout=10)
+                                if mr.status_code == 200:
+                                    md = mr.json()
+                                    mems = md.get("data", [])
+                                    _add_sync_log_internal(f"  [DEB] ChatLab端成员({len(mems)}个): {[{{'id':m.get('platformId','?'), 'name':m.get('accountName','?')}} for m in mems[:3]]}")
+                                else:
+                                    _add_sync_log_internal(f"  [DEB] 查成员失败 HTTP {mr.status_code}")
+                            except Exception as ee:
+                                _add_sync_log_internal(f"  [DEB] 查成员异常: {ee}")
                     else:
                         err_msg = str(ir.get("error","导入返回失败"))
                         _add_sync_log_internal(f"  ❌ 导入失败: {err_msg}")
