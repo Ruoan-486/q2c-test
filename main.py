@@ -649,6 +649,11 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
         "notify": "通知",
         "anonymous": "匿名用户",
     }
+
+    # DEBUG: 查看 977760094 的名称来源
+    _DEBUG_UID = "977760094"
+    if _DEBUG_UID in uid_to_name:
+        _add_sync_log_internal(f"  [DEBUG] {_DEBUG_UID} 名称: '{uid_to_name[_DEBUG_UID]}'")
     for sys_id, sys_name in _SYSTEM_NAMES.items():
         if sys_id not in uid_to_name:
             uid_to_name[sys_id] = sys_name
