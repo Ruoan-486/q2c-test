@@ -639,7 +639,10 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
 
     # peer 名字（传 is_peer=True 以读取 chatInfo 顶层备注）
     if peer_uid and not uid_to_name.get(peer_uid):
-        uid_to_name[peer_uid] = _resolve_name({}, is_peer=True)
+        # 私聊场景：对方不在 statistics.senders 中，先尝试从 chatInfo 取备注
+        peer_name = _resolve_name({}, is_peer=True)
+        # 如果备注/remark/name 都为空，用 display_name（会话标题）兜底
+        uid_to_name[peer_uid] = peer_name or display_name
 
     # ── 补充系统/匿名账号名称映射 ──
     _SYSTEM_NAMES = {
@@ -650,10 +653,7 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
         "anonymous": "匿名用户",
     }
 
-    # DEBUG: 查看 977760094 的名称来源
-    _DEBUG_UID = "977760094"
-    if _DEBUG_UID in uid_to_name:
-        _add_sync_log_internal(f"  [DEBUG] {_DEBUG_UID} 名称: '{uid_to_name[_DEBUG_UID]}'")
+
     for sys_id, sys_name in _SYSTEM_NAMES.items():
         if sys_id not in uid_to_name:
             uid_to_name[sys_id] = sys_name
