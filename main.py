@@ -806,7 +806,8 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
         if str(uid).strip() in _SKIP_IDS:
             continue
         clean_name = "".join(c for c in name if c.isprintable() or c == ' ')
-        member_entry = {"platformId": uid, "accountName": clean_name.strip() or uid}
+        clean_name = clean_name.strip() or uid
+        member_entry = {"platformId": uid, "accountName": clean_name}
         if uid in avatars_map:
             b64_clean = avatars_map[uid].strip().replace("\n", "").replace("\r", "")
             mime = _detect_mime(b64_clean)
@@ -1345,9 +1346,9 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
                     "chatlab": chatlab_data["chatlab"],
                     "messages": batch,
                 }
+                import_body["members"] = chatlab_data["members"]
                 if is_first:
                     import_body["meta"] = chatlab_data["meta"]
-                    import_body["members"] = chatlab_data["members"]
 
                 try:
                     # 调试：打印第一条消息样例
