@@ -1325,16 +1325,30 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
             import_error = None
             total_msgs = len(chatlab_data["messages"])
             batch_size = 5000
+            # 检查会话是否已存在：已存在则不传 accountName（不覆盖手动改名）
+            session_exists = False
+            try:
+                sr = httpx.get(f"{chatlab_base}/api/v1/sessions/{session_id}", headers=chatlab_headers, timeout=5)
+                session_exists = sr.status_code == 200
+            except Exception:
+                pass
+            # 构建成员列表（已有会话只传 platformId + avatar，不传 accountName）
+            if session_exists:
+                import_members = [{"platformId": m["platformId"], "avatar": m.get("avatar","")} for m in chatlab_data["members"] if m.get("avatar")]
+                _add_sync_log_internal(f"  ℹ️ 会话已存在, 仅更新 {len(import_members)} 个头像")
+            else:
+                import_members = chatlab_data["members"]
+
             for i in range(0, total_msgs, batch_size):
                 batch = chatlab_data["messages"][i:i + batch_size]
                 is_first = (i == 0)
                 import_body = {
                     "chatlab": chatlab_data["chatlab"],
                     "messages": batch,
-                    "members": chatlab_data["members"],
+                    "members": import_members,
                     "options": {"metaUpdateMode": "none", "memberUpdateMode": "upsert"},
                 }
-                if is_first:
+                if is_first and not session_exists:
                     import_body["meta"] = chatlab_data["meta"]
 
                 try:
