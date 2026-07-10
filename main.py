@@ -694,7 +694,11 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
                     sid = str(s.get("uin", s.get("uid", "") or "")).strip()
                     if sid and sid != self_uid_raw_str:
                         peer_name_from_stats = (s.get("name") or s.get("nick") or "").strip()
-                uid_to_name[peer_uid] = peer_name_from_stats or peer_name or display_name
+                # 如果 statistics 中名字无效（空/0/纯数字），用 display_name
+                if peer_name_from_stats and peer_name_from_stats != "0" and not peer_name_from_stats.isdigit():
+                    uid_to_name[peer_uid] = peer_name_from_stats
+                else:
+                    uid_to_name[peer_uid] = display_name
 
     # ── 用解析出的 peer 名覆盖会话标题 ──
     if chat_type == "private" and peer_uid:
