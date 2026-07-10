@@ -568,9 +568,9 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
 
     # 从 chatInfo 获取真实会话名
     display_name = chat_info.get("name", "")
-    if not display_name:
+    if not display_name or display_name == peer_uid or display_name.isdigit():
         display_name = chat_info.get("peerName", chat_info.get("nick", ""))
-    if not display_name or display_name == peer_uid:
+    if not display_name or display_name == peer_uid or display_name.isdigit():
         display_name = peer_name or peer_uid
 
     # ── uin ↔ uid 双向映射（群聊双体系桥接）──
@@ -661,32 +661,46 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
     if self_uid:
         uid_to_name[self_uid] = self_name or self_uid
 
-    for s in statistics.get("senders", []):
-        if not isinstance(s, dict):
-            continue
-        uid = _normalize_id(s)
-        if uid:
-            uid_to_name[uid] = _resolve_name(s)
-
-    # 补充 chatInfo.members 中的名称（可能包含统计中遗漏的用户）
-    for m in chat_info.get("members", []):
-        if not isinstance(m, dict):
-            continue
-        mid = _normalize_id(m)
-        if mid and mid not in uid_to_name:
-            uid_to_name[mid] = _resolve_name(m)
-
-    # ── peer 名称：私聊强制覆盖备注，群聊兜底 ──
-    if chat_type == "private" and peer_uid:
-        # 私聊：好友备注优先于任何已有名称，直接覆盖
-        peer_remark = (chat_info.get("peerRemark") or chat_info.get("friendRemark") or "").strip()
-        if peer_remark:
-            uid_to_name[peer_uid] = peer_remark
-        elif peer_uid not in uid_to_name:
+    if chat_type == "group":
+        # 群聊：用 statistics.senders（key 是字符串 uid，和消息 sender 一致）
+        for s in statistics.get("senders", []):
+            if not isinstance(s, dict):
+                continue
+            uid = _normalize_id(s)
+            if uid:
+                uid_to_name[uid] = _resolve_name(s)
+        # 补充 chatInfo.members
+        for m in chat_info.get("members", []):
+            if not isinstance(m, dict):
+                continue
+            mid = _normalize_id(m)
+            if mid and mid not in uid_to_name:
+                uid_to_name[mid] = _resolve_name(m)
+        # 群聊peer兜底
+        if peer_uid and peer_uid not in uid_to_name:
             uid_to_name[peer_uid] = display_name
-    elif peer_uid and peer_uid not in uid_to_name:
-        # 群聊：不在成员表里才兜底
-        uid_to_name[peer_uid] = display_name
+    else:
+        # 私聊：QCE v4 用数字 uin 做 sender，statistics 用字符串 uid
+        if peer_uid:
+            peer_remark = (chat_info.get("peerRemark") or chat_info.get("friendRemark") or "").strip()
+            if peer_remark:
+                uid_to_name[peer_uid] = peer_remark
+            else:
+                self_uid_raw_str = str(chat_info.get("selfUid", "") or "").strip()
+                peer_name_from_stats = ""
+                for s in statistics.get("senders", []):
+                    if not isinstance(s, dict):
+                        continue
+                    sid = str(s.get("uin", s.get("uid", "") or "")).strip()
+                    if sid and sid != self_uid_raw_str:
+                        peer_name_from_stats = (s.get("name") or s.get("nick") or "").strip()
+                uid_to_name[peer_uid] = peer_name_from_stats or peer_name or display_name
+
+    # ── 用解析出的 peer 名覆盖会话标题 ──
+    if chat_type == "private" and peer_uid:
+        resolved = uid_to_name.get(peer_uid, "")
+        if resolved and resolved != peer_uid:
+            display_name = resolved
 
     # ── 补充系统/匿名账号名称映射 ──
     _SYSTEM_NAMES = {
@@ -711,31 +725,37 @@ def _convert_qce_to_chatlab(qce_json: dict, peer_info: dict,
     if chat_type == "group":
         chatlab_data["meta"]["groupId"] = peer_uid
 
-    # ── 头像提取（全场景兼容） ──
-    avatars_list = qce_json.get("avatars", [])
-    if not isinstance(avatars_list, list):
-        avatars_list = []
+    # ── 头像提取（兼容 list [{uin,b64}] 和 dict {uid: b64} 两种格式）──
+    avatars_raw = qce_json.get("avatars", {})
     avatars_map = {}
-
-    # 1) 内嵌 Base64 头像：兼容所有可能的字段名 + 去重 Data URL 前缀
     _AVATAR_B64_KEYS = ["base64", "avatar", "avatarBase64", "data", "content"]
-    for av in avatars_list:
-        if not isinstance(av, dict):
-            continue
-        av_uid = _normalize_id(av)
-        # 遍历所有可能的 base64 字段名，取第一个有值的
-        av_b64 = ""
-        for key in _AVATAR_B64_KEYS:
-            val = av.get(key, "")
-            if isinstance(val, str) and len(val) > 10:
-                av_b64 = val.strip().replace("\n", "").replace("\r", "")
-                break
-        if not av_uid or not av_b64:
-            continue
-        # 去除已有的 Data URL 前缀（部分 QCE 版本自带）
-        if "data:image" in av_b64 and ";base64," in av_b64:
-            av_b64 = av_b64.split(";base64,", 1)[1]
-        avatars_map[av_uid] = av_b64
+
+    if isinstance(avatars_raw, dict):
+        # QCE v4 格式：{uid_or_uin: base64_string}
+        for av_uid, av_b64_raw in avatars_raw.items():
+            if not isinstance(av_b64_raw, str) or len(av_b64_raw) < 10:
+                continue
+            av_b64 = av_b64_raw.strip().replace("\n", "").replace("\r", "")
+            if "data:image" in av_b64 and ";base64," in av_b64:
+                av_b64 = av_b64.split(";base64,", 1)[1]
+            avatars_map[str(av_uid).strip()] = av_b64
+    elif isinstance(avatars_raw, list):
+        # QCE 旧格式：[{uin, base64}, ...]
+        for av in avatars_raw:
+            if not isinstance(av, dict):
+                continue
+            av_uid = _normalize_id(av)
+            av_b64 = ""
+            for key in _AVATAR_B64_KEYS:
+                val = av.get(key, "")
+                if isinstance(val, str) and len(val) > 10:
+                    av_b64 = val.strip().replace("\n", "").replace("\r", "")
+                    break
+            if not av_uid or not av_b64:
+                continue
+            if "data:image" in av_b64 and ";base64," in av_b64:
+                av_b64 = av_b64.split(";base64,", 1)[1]
+            avatars_map[av_uid] = av_b64
 
     # 2) 本地头像文件兜底（基准路径 = JSON 文件所在目录）
     base_dir = json_file_dir or qce_export_dir
@@ -1114,7 +1134,7 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
             # 清理非法文件名
             custom_filename = custom_filename.replace("/", "_").replace("\\", "_").replace(":", "_")
 
-            # 构造导出参数（完全对齐 QCE v4 tool 前端格式）
+            # 构造导出参数（QCE v4 完整格式）
             session_name = peer.get("name", peer_name)
             now_ts = int(time.time())
             export_params = {
@@ -1263,6 +1283,8 @@ def _run_full_sync(config: dict, state: dict, source: str = "manual") -> dict:
                 continue
 
             _add_sync_log_internal(f"  读取到 {len(qce_data.get('messages',[]))} 条消息")
+
+
 
             # 转换格式
             _sync_progress["detail"] = "转换格式..."
