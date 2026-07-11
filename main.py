@@ -1100,13 +1100,13 @@ def run_sync_sync(config: dict, state: dict, source: str = "manual") -> dict:
                     return {"success": [], "failed": [], "delayed": True, "delay_minutes": delay_min}
 
                 elif action == "sync_now":
-                    _add_sync_log_internal("用户选择立即同步，等待 10 秒后启动...")
-                    time.sleep(10)
-                    _add_sync_log_internal("等待结束，终止 QQ 进程...")
+                    _add_sync_log_internal("用户选择立即同步，终止 QQ 进程...")
                     _kill_qq()
                     # 启动 QCE（会自动拉 QQ）
                     if qce_script:
                         _ensure_services_running(config)
+                    # 等待 10 秒让 QCE 启动完成
+                    time.sleep(10)
             else:
                 _add_sync_log_internal("⚠ 未配置 QCE 和 QQ 启动脚本，跳过同步")
                 _sync_progress["status"] = "idle"
