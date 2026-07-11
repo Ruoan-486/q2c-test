@@ -131,29 +131,24 @@ def _get_startup_shortcut_path() -> Path:
 
 
 def _get_app_exe_path() -> Path:
-    """当前 Python 解释器路径或打包后的 exe 路径"""
+    """当前脚本路径（打包 exe 时返回 exe 路径）"""
     if getattr(sys, 'frozen', False):
         return Path(sys.executable)
-    return Path(sys.executable)
+    return Path(__file__)
 
 
 _autostart_timer: threading.Timer | None = None
 
 
 def enable_autostart(config: dict):
-    """写入启动文件夹批处理"""
+    """写入启动文件夹批处理（与同步工具同款方式）"""
     shortcut = _get_startup_shortcut_path()
     shortcut.parent.mkdir(parents=True, exist_ok=True)
 
-    exe_path = _get_app_exe_path()
-    work_dir = Path(config["app"].get("install_dir", "")) if config["app"].get("install_dir") else exe_path.parent
-    port = config["app"].get("port", 15520)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    port = config.get("app", {}).get("port", 15520)
 
-    # 写一个 bat 文件（更可靠，且可以静默启动）
-    bat_content = f'''@echo off
-cd /d "{work_dir}"
-start "" /min "{exe_path}" --port {port} --no-browser
-'''
+    bat_content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min pythonw "main.py" --port {port} --no-browser\r\nexit'
     shortcut.write_text(bat_content, encoding="utf-8")
     log(f"开机自启已启用: {shortcut}")
 
@@ -172,6 +167,19 @@ def disable_autostart():
 
 def is_autostart_enabled() -> bool:
     return _get_startup_shortcut_path().exists()
+
+
+def _ensure_autostart_current():
+    """每次启动时同步开机自启地址为当前路径（与同步工具同款方式）"""
+    try:
+        sp = _get_startup_shortcut_path()
+        if not sp.parent.exists():
+            sp.parent.mkdir(parents=True, exist_ok=True)
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min pythonw "main.py" --port 15520 --no-browser\r\nexit'
+        sp.write_text(content, encoding="utf-8")
+    except Exception:
+        pass  # 静默失败，不影响启动
 
 
 # ── 定时同步调度器 ────────────────────────────────────────
@@ -1967,7 +1975,7 @@ async def api_set_install_dir(body: SetInstallDir):
 
 # ── 自动更新 API ─────────────────────────────────────────
 
-VERSION = "1.5.0"
+VERSION = "1.5.2-dev"
 # 更新通过 portal 后台文件下载。由于 portal 需要 admin 登录，
 # 改为比较本地记录的版本号与远程文件的检查方式：
 # 直接下载 tar.gz 的 header (Range 请求) 看 if-modified 或者比较本地记录的版本
@@ -2341,10 +2349,8 @@ def main():
 
     config = load_config()
 
-    # 恢复开机自启状态
-    if config.get("app", {}).get("autostart"):
-        if not is_autostart_enabled():
-            enable_autostart(config)
+    # 每次启动同步开机自启地址为当前路径（工具被移动后也能自动修正）
+    _ensure_autostart_current()
 
     # 恢复定时同步
     if config.get("sync", {}).get("auto_sync_enabled"):
