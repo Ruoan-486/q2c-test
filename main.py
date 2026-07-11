@@ -148,7 +148,7 @@ def enable_autostart(config: dict):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     port = config.get("app", {}).get("port", 15520)
 
-    bat_content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min "后台启动.bat"  # port {port} --no-browser\r\nexit'
+    bat_content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min "bg_start.bat"  # port {port} --no-browser\r\nexit'
     shortcut.write_text(bat_content, encoding="utf-8")
     log(f"开机自启已启用: {shortcut}")
 
@@ -169,6 +169,21 @@ def is_autostart_enabled() -> bool:
     return _get_startup_shortcut_path().exists()
 
 
+def _ensure_bg_start_copy():
+    try:
+        app_dir = os.path.dirname(os.path.abspath(__file__))
+        src = os.path.join(app_dir, "\u540e\u53f0\u542f\u52a8.bat")
+        dst = os.path.join(app_dir, "bg_start.bat")
+        if os.path.exists(src) and not os.path.exists(dst):
+            import shutil
+            shutil.copy2(src, dst)
+    except Exception:
+        pass
+
+
+_ensure_bg_start_copy()
+
+
 def _ensure_autostart_current():
     """每次启动时同步开机自启地址为当前路径（与同步工具同款方式）"""
     try:
@@ -176,7 +191,7 @@ def _ensure_autostart_current():
         if not sp.parent.exists():
             sp.parent.mkdir(parents=True, exist_ok=True)
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min "后台启动.bat"  # port 15520 --no-browser\r\nexit'
+        content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min "bg_start.bat"  # port 15520 --no-browser\r\nexit'
         sp.write_text(content, encoding="utf-8")
     except Exception:
         pass  # 静默失败，不影响启动
