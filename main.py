@@ -148,7 +148,7 @@ def enable_autostart(config: dict):
     script_dir = os.path.dirname(os.path.abspath(__file__))
     port = config.get("app", {}).get("port", 15520)
 
-    bat_content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min pythonw "main.py" --port {port} --no-browser\r\nexit'
+    bat_content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min "后台启动.bat"  # port {port} --no-browser\r\nexit'
     shortcut.write_text(bat_content, encoding="utf-8")
     log(f"开机自启已启用: {shortcut}")
 
@@ -176,7 +176,7 @@ def _ensure_autostart_current():
         if not sp.parent.exists():
             sp.parent.mkdir(parents=True, exist_ok=True)
         script_dir = os.path.dirname(os.path.abspath(__file__))
-        content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min pythonw "main.py" --port 15520 --no-browser\r\nexit'
+        content = f'@echo off\r\ncd /d "{script_dir}"\r\nstart "" /min "后台启动.bat"  # port 15520 --no-browser\r\nexit'
         sp.write_text(content, encoding="utf-8")
     except Exception:
         pass  # 静默失败，不影响启动
